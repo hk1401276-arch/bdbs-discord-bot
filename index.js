@@ -13,7 +13,6 @@ const client = new Client({
 const app = express();
 app.use(express.json());
 
-// Website থেকে Role অ্যাসাইন করার API
 app.post('/assign-role', async (req, res) => {
   const secret = req.headers['x-webhook-secret'];
   if (secret !== process.env.WEBHOOK_SECRET) {
@@ -37,9 +36,8 @@ app.post('/assign-role', async (req, res) => {
       }
     }
 
-    // Username দিয়ে খুঁজুন (server-এ থাকতে হবে)
     if (!member && discord_username) {
-      await guild.members.fetch(); // cache members
+      await guild.members.fetch();
       const uname = discord_username.toLowerCase().replace(/^@/, '');
       member = guild.members.cache.find(
         (m) =>
@@ -51,7 +49,9 @@ app.post('/assign-role', async (req, res) => {
 
     if (!member) {
       console.log('Member not found:', discord_id || discord_username);
-      return res.status(404).json({ error: 'Member not found in server. User must join the Discord server first.' });
+      return res.status(404).json({
+        error: 'Member not found in server. User must join the Discord server first.'
+      });
     }
 
     await member.roles.add(role_id);
@@ -67,7 +67,6 @@ client.once('clientReady', () => {
   console.log(`Bot logged in as ${client.user.tag}`);
 });
 
-// Fallback for older discord.js
 client.once('ready', () => {
   console.log(`Bot logged in as ${client.user.tag}`);
 });
