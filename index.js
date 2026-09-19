@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, Partials } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, EmbedBuilder } = require('discord.js');
 const express = require('express');
 
 const client = new Client({
@@ -108,7 +108,7 @@ app.get('/', (req, res) => {
     ok: true,
     service: 'bdbs-discord-bot',
     bot_ready: client.isReady(),
-    endpoints: ['/lookup-member', '/assign-role'],
+    endpoints: ['/lookup-member', '/assign-role', '/announce', '/dm-user'],
   });
 });
 
@@ -188,7 +188,137 @@ app.post('/assign-role', async (req, res) => {
   }
 });
 
+
+// Discord channel auto-announce (embed)
+app.post('/announce', async (req, res) => {
+  if (!checkSecret(req, res)) return;
+
+  const body = req.body || {};
+  const channelId = String(body.channel_id || process.env.ANNOUNCE_CHANNEL_ID || '').trim();
+  if (!channelId) {
+    return res.status(400).json({ error: 'channel_id required (body or ANNOUNCE_CHANNEL_ID env)' });
+  }
+
+  const title = String(body.title || 'Announcement').slice(0, 256);
+  const description = String(body.description || '').slice(0, 4000);
+  const color = Number(body.color) || 0x6366f1;
+  const imageUrl = body.image_url ? String(body.image_url) : null;
+  const thumbnailUrl = body.thumbnail_url ? String(body.thumbnail_url) : null;
+  const url = body.url ? String(body.url) : null;
+  const footer = body.footer ? String(body.footer).slice(0, 2048) : 'BD BUS SIM Asset Store';
+  const fields = Array.isArray(body.fields) ? body.fields.slice(0, 25) : [];
+  const content = body.content ? String(body.content).slice(0, 2000) : null; // @everyone optional
+
+  try {
+    if (!client.isReady()) {
+      return res.status(503).json({ error: 'Bot not ready yet' });
+    }
+
+    const channel = await client.channels.fetch(channelId);
+    if (!channel || !channel.isTextBased()) {
+      return res.status(400).json({ error: 'Invalid channel or not text-based' });
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle(title)
+      .setColor(color)
+      .setTimestamp()
+      .setFooter({ text: footer });
+
+    if (description) embed.setDescription(description);
+    if (url) embed.setURL(url);
+    if (imageUrl && /^https?:\/\//i.test(imageUrl)) embed.setImage(imageUrl);
+    if (thumbnailUrl && /^https?:\/\//i.test(thumbnailUrl)) embed.setThumbnail(thumbnailUrl);
+
+    for (const f of fields) {
+      if (!f || !f.name) continue;
+      embed.addFields({
+        name: String(f.name).slice(0, 256),
+        value: String(f.value || '—').slice(0, 1024),
+        inline: !!f.inline,
+      });
+    }
+
+    const payload = { embeds: [embed] };
+    if (content) payload.content = content;
+
+    const msg = await channel.send(payload);
+    console.log('Announce sent to', channelId, 'msg', msg.id);
+    res.json({ success: true, message_id: msg.id, channel_id: channelId });
+  } catch (err) {
+    console.error('announce error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+// DM user (order approved etc.)
+app.post('/dm-user', async (req, res) => {
+  if (!checkSecret(req, res)) return;
+
+  const body = req.body || {};
+  const { discord_id, discord_username } = body;
+  if (!discord_id && !discord_username) {
+    return res.status(400).json({ error: 'discord_id or discord_username required' });
+  }
+
+  const title = String(body.title || 'Notification').slice(0, 256);
+  const description = String(body.description || '').slice(0, 4000);
+  const color = Number(body.color) || 0x22c55e;
+  const footer = body.footer ? String(body.footer).slice(0, 2048) : 'BD BUS SIM Asset Store';
+  const fields = Array.isArray(body.fields) ? body.fields.slice(0, 25) : [];
+  const content = body.content ? String(body.content).slice(0, 2000) : null;
+  const imageUrl = body.image_url ? String(body.image_url) : null;
+  const url = body.url ? String(body.url) : null;
+
+  try {
+    if (!client.isReady()) {
+      return res.status(503).json({ error: 'Bot not ready yet' });
+    }
+
+    const guild = await client.guilds.fetch(process.env.GUILD_ID);
+    const member = await findMember(guild, discord_id, discord_username);
+    if (!member) {
+      return res.status(404).json({
+        error: 'Member not found in server. User must join Discord first.',
+        success: false,
+      });
+    }
+
+    const embed = new EmbedBuilder()
+      .setTitle(title)
+      .setColor(color)
+      .setTimestamp()
+      .setFooter({ text: footer });
+
+    if (description) embed.setDescription(description);
+    if (url) embed.setURL(url);
+    if (imageUrl && /^https?:\/\//i.test(imageUrl)) embed.setImage(imageUrl);
+
+    for (const f of fields) {
+      if (!f || !f.name) continue;
+      embed.addFields({
+        name: String(f.name).slice(0, 256),
+        value: String(f.value || '—').slice(0, 1024),
+        inline: !!f.inline,
+      });
+    }
+
+    const payload = { embeds: [embed] };
+    if (content) payload.content = content;
+
+    await member.send(payload);
+    console.log('DM sent to', member.user.tag, member.id);
+    res.json({ success: true, discord_id: member.id });
+  } catch (err) {
+    console.error('dm-user error:', err);
+    // Often: Cannot send messages to this user (DMs closed)
+    res.status(500).json({ error: err.message, success: false });
+  }
+});
+
 client.once('clientReady', () => {
+
   console.log(`Bot logged in as ${client.user.tag}`);
 });
 // fallback for older discord.js
