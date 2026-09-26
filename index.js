@@ -102,6 +102,65 @@ function memberToProfile(member) {
   };
 }
 
+// ========== AUTO PROFILE SYNC (name / avatar change) ==========
+// Store-এর api_discord_profile_update.php URL এখানে দাও (অথবা Railway env-এ STORE_PROFILE_SYNC_URL সেট কর)
+const STORE_SYNC_URL = process.env.STORE_PROFILE_SYNC_URL || 'https://store.bdbussim.com/api_discord_profile_update.php';
+const STORE_SYNC_SECRET = process.env.WEBHOOK_SECRET;
+
+async function pushProfileToStore(member) {
+  try {
+    const profile = memberToProfile(member);
+    const res = await fetch(STORE_SYNC_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Webhook-Secret': STORE_SYNC_SECRET,
+      },
+      body: JSON.stringify({
+        discord_id: profile.discord_id,
+        discord_username: profile.discord_username,
+        display_name: profile.display_name,
+        avatar_url: profile.avatar_url,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    console.log('Profile sync result:', profile.discord_id, data);
+  } catch (e) {
+    console.error('pushProfileToStore error:', e.message);
+  }
+}
+
+// Username / globalName / avatar change
+client.on('userUpdate', async (oldUser, newUser) => {
+  if (
+    oldUser.username === newUser.username &&
+    oldUser.globalName === newUser.globalName &&
+    oldUser.avatar === newUser.avatar
+  ) return;
+
+  try {
+    const guild = await client.guilds.fetch(process.env.GUILD_ID);
+    const member = await guild.members.fetch(newUser.id).catch(() => null);
+    if (!member) return;
+    console.log('userUpdate detected:', newUser.username, newUser.id);
+    await pushProfileToStore(member);
+  } catch (e) {
+    console.error('userUpdate handler error:', e.message);
+  }
+});
+
+// Server nickname change
+client.on('guildMemberUpdate', async (oldMember, newMember) => {
+  if (
+    oldMember.nickname === newMember.nickname &&
+    oldMember.user.username === newMember.user.username &&
+    oldMember.user.avatar === newMember.user.avatar
+  ) return;
+
+  console.log('guildMemberUpdate detected:', newMember.user.username, newMember.id);
+  await pushProfileToStore(newMember);
+});
+
 // Health check (no secret)
 app.get('/', (req, res) => {
   res.json({
@@ -188,7 +247,6 @@ app.post('/assign-role', async (req, res) => {
   }
 });
 
-
 // Discord channel auto-announce (embed)
 app.post('/announce', async (req, res) => {
   if (!checkSecret(req, res)) return;
@@ -242,17 +300,16 @@ app.post('/announce', async (req, res) => {
     const payload = { embeds: [embed] };
     if (content) payload.content = content;
 
-    const msg = await channel.send(payload);
-    console.log('Announce sent to', channelId, 'msg', msg.id);
-    res.json({ success: true, message_id: msg.id, channel_id: channelId });
+    await channel.send(payload);
+    console.log('Announce sent to channel', channelId);
+    res.json({ success: true, channel_id: channelId });
   } catch (err) {
     console.error('announce error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message, success: false });
   }
 });
 
-
-// DM user (order approved etc.)
+// DM to a specific user
 app.post('/dm-user', async (req, res) => {
   if (!checkSecret(req, res)) return;
 
@@ -318,7 +375,6 @@ app.post('/dm-user', async (req, res) => {
 });
 
 client.once('clientReady', () => {
-
   console.log(`Bot logged in as ${client.user.tag}`);
 });
 // fallback for older discord.js
